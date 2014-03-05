@@ -1,0 +1,315 @@
+#! /bin/bash
+
+
+
+function passvault_help()
+{
+	echo
+	echo
+	echo $0:
+	echo "Passvault is a tool to manage your passwords in a gpg-encrypted text file."
+	echo "To privide security, passwords will only be written encrypted,"
+	echo "all unencrypted processing is done within pipes."
+	echo
+	echo "Usage:"
+	echo "	-l <line fragment>  |"
+	echo "	--lookup <line fragment>        Lookup all password lines containing the fragment"
+	echo "	-a | --add                      Add a password line to the vault"
+	echo "	-d | --delete                   Delete one or more lines from the vault"
+	echo "	-s | --setup                    Set up the passvault file at \$PASSVAULTFILE_LOCATION"
+	echo "	-e | --environment-variable     Set the environment variable \$PASSVAULTFILE_LOCATION in your .\$SHELLrc"
+	echo "	-h | --help                 Show this help message and exit"
+	echo
+	echo "Environment variables:"
+	echo -e "	\$PASSVAULTFILE_LOCATION     Where to store the passvault file. Defaults to ~/.passvault.gpg if not set.
+	Current value: $PASSVAULTFILE_LOCATION"
+	echo
+	echo
+	echo
+	echo "Author: mox"
+	exit 0
+}
+
+
+
+
+function passvault_setup()
+{
+	if [[ -e $PASSVAULTFILE_LOCATION ]]
+	then
+		echo -e "Passvault is configured to use $PASSVAULTFILE_LOCATION to store its passwords
+		(to change this, set \$PASSVAULTFILE_LOCATION to another value in your ~/.bashrc).
+		A file with this name has been found in the file system. This _might_ be from a previous setup of passvault.
+		Should it be removed? [y/N] "
+		read -r response
+		response=${response,,}    # tolower
+		if [[ $response =~ ^(yes|y)$ ]]
+		then
+			echo "Ok, removing the passvault file..."
+			rm $PASSVAULTFILE_LOCATION
+		else
+			echo "Passvault cannot work without setting up the vault file. Aborting..."
+			exit 1
+		fi
+	fi
+
+
+	read -sp "Please enter the master password:"  mpw
+	echo
+	echo ...
+	# create the passvault file with one example line
+	echo "www.example.com  username  password # this line is just an example" | gpg --batch --passphrase $mpw -c --cipher-algo AES256 --force-mdc -o "$PASSVAULTFILE_LOCATION"
+	if [[ "$?" -eq 0 ]]
+	then
+		echo Passvault was set up succesfully!
+		exit 0
+	else
+		echo There was an error, the passvault file could not be set up properly!
+		exit 1
+	fi
+
+
+
+}
+
+function passvault_environmen_variable()
+{
+	new_passvault_file_location=$1
+	echo \$PASSVAULTFILE_LOCATION will be set to ${new_passvault_file_location:="~/.passvault_save.gpg"}
+	shell=$(basename $SHELL)
+	echo Your shell is $shell
+
+	read -r -p "Are you sure you want to continue? [y/N] " response
+	response=${response,,}    # tolower
+	if [[ $response =~ ^(yes|y)$ ]]
+	then
+
+		case "$shell" in
+			sh)
+				echo sh
+				echo "PASSVAULTFILE_LOCATION=$new_passvault_file_location" >> ${HOME}/.profile
+				echo "export PASSVAULTFILE_LOCATION" >> ${HOME}/.profile
+				;;
+			bash)
+				echo bash
+				echo "export PASSVAULTFILE_LOCATION=$new_passvault_file_location" >> ${HOME}/.bashrc
+				;;
+			csh)
+				echo csh
+				echo "setenv PASSVAULTFILE_LOCATION $new_passvault_file_location" >> ${HOME}/.cshrc
+				;;
+			tcsh)
+				echo tcsh
+				echo "setenv PASSVAULTFILE_LOCATION $new_passvault_file_location" >> ${HOME}/.tcshrc
+				;;
+			ksh)
+				echo ksh
+				echo "PASSVAULTFILE_LOCATION=$new_passvault_file_location" >> ${HOME}/.kshrc
+				echo "export PASSVAULTFILE_LOCATION" >> ${HOME}/.kshrc
+				;;
+			zsh)
+				echo zsh
+				echo "export PASSVAULTFILE_LOCATION=$new_passvault_file_location" >> ${HOME}/.zshrc
+				;;
+			*)
+				echo "Sorry, your shell is not supported. You will have to set the variable yourself. Good luck ;)"
+				;;
+		esac
+
+	else
+		echo Aborting. No changes were made...
+		exit 0
+	fi
+
+
+
+}
+
+
+
+function passvault_lookup()
+{
+	# Check if $PASSVAULTFILE_LOCATION is set and if not set, set it to "~/.passvault_save.gpg". Then expand the path.
+	eval PASSVAULTFILE_LOCATION=${PASSVAULTFILE_LOCATION:="~/.passvault_save.gpg"}
+	if [[ ! -e $PASSVAULTFILE_LOCATION ]]
+	then
+		echo "The passvault file could not be found at $PASSVAULTFILE_LOCATION . If there is a passvault file, please set \$PASSVAULTFILE_LOCATION to point at it, or use passvault_setup.sh to create a passvault file."
+		exit 1
+	fi
+
+
+	if [[ $# -lt 2 ]] # if the password is not provided at the command line
+	then
+		# make sure the password is correct
+		read -sp "Please enter the master password: "  mpw
+		echo
+		gpg --batch --passphrase $mpw -q --decrypt $PASSVAULTFILE_LOCATION > /dev/null 2>&1
+		retval=$?
+
+		while [[ $retval -ne 0 ]] # loop until the password is valid
+		do
+			read -sp "Wrong password. Please try again: "  mpw
+			echo
+			gpg --batch --passphrase $mpw -q --decrypt $PASSVAULTFILE_LOCATION > /dev/null 2>&1
+			retval=$?
+		done
+
+	else
+		# In this case the password should be correct, because it is checked before calling this script.
+		mpw=$2
+	fi
+
+
+	echo
+	if [[ "$1" != "" ]]
+	then
+		message=$3
+		message=${message:="Found lines:\n"}
+		# pipe into less so the passwords will not be visible on the screen for so long (less usually clears the screen when it exits)
+		gpg --batch --passphrase $mpw -q --decrypt $PASSVAULTFILE_LOCATION | grep --ignore-case "$1" | (echo -e $message && cat; echo -e "\n\n")| less
+	else
+		echo "No search term specified."
+	fi
+	echo
+}
+
+
+
+
+function passvault_add()
+{
+	# Check if $PASSVAULTFILE_LOCATION is set and if not set, set it to "~/.passvault_save.gpg". Then expand the path.
+	eval PASSVAULTFILE_LOCATION=${PASSVAULTFILE_LOCATION:="~/.passvault_save.gpg"}
+	if [[ ! -e $PASSVAULTFILE_LOCATION ]]
+	then
+		echo "The passvault file could not be found at $PASSVAULTFILE_LOCATION . If there is a passvault file, please set \$PASSVAULTFILE_LOCATION to point at it, or use passvault_setup.sh to create a passvault file."
+		exit 1
+	fi
+
+	read -p "Please enter the site name: "  site
+	#echo
+	read -p "Please enter the account name: " acc
+	#echo
+	read -sp "Please enter the account password: "  apw
+	echo
+
+
+
+	# make sure the password is correct
+	read -sp "Please enter the master password: "  mpw
+	echo
+	gpg --batch --passphrase $mpw -q --decrypt $PASSVAULTFILE_LOCATION > /dev/null 2>&1
+	retval=$?
+	while [[ $retval -ne 0 ]] # loop until the password is valid
+	do
+		read -sp "Wrong password. Please try again: "  mpw
+		echo
+		gpg --batch --passphrase $mpw -q --decrypt $PASSVAULTFILE_LOCATION > /dev/null 2>&1
+		retval=$?
+	done
+	echo
+
+
+
+	mv $PASSVAULTFILE_LOCATION /tmp/.temporary_passvault_file.gpg
+
+	echo doing the add
+	gpg --batch --passphrase $mpw -q --decrypt /tmp/.temporary_passvault_file.gpg | (echo $site $acc $apw && cat)   | gpg --batch --passphrase $mpw -c --cipher-algo AES256 --force-mdc -o $PASSVAULTFILE_LOCATION
+	echo done the add
+
+	rm /tmp/.temporary_passvault_file.gpg
+}
+
+function passvault_delete()
+{
+	# Check if $PASSVAULTFILE_LOCATION is set and if not set, set it to "~/.passvault_save.gpg". Then expand the path.
+	eval PASSVAULTFILE_LOCATION=${PASSVAULTFILE_LOCATION:="~/.passvault_save.gpg"}
+	if [[ ! -e $PASSVAULTFILE_LOCATION ]]
+	then
+		echo "The passvault file could not be found at $PASSVAULTFILE_LOCATION . If there is a passvault file, please set \$PASSVAULTFILE_LOCATION to point at it, or use passvault_setup.sh to create a passvault file."
+		exit 1
+	fi
+
+	read -p "What should be deleted?: "  to_delete
+
+	# make sure the password is correct
+	read -sp "Please enter the master password: "  mpw
+	echo
+	gpg --batch --passphrase $mpw -q --decrypt $PASSVAULTFILE_LOCATION > /dev/null 2>&1
+	retval=$?
+	while [[ $retval -ne 0 ]] # loop until the password is valid
+	do
+		read -sp "Wrong password. Please try again: "  mpw
+		echo
+		gpg --batch --passphrase $mpw -q --decrypt $PASSVAULTFILE_LOCATION > /dev/null 2>&1
+		retval=$?
+	done
+	echo
+
+	passvault_lookup $to_delete $mpw "$0 will delete the following lines:\n"
+
+	read -r -p "Are you sure? [y/N] " response
+	response=${response,,}    # tolower
+	if [[ $response =~ ^(yes|y)$ ]]
+	then
+		echo doing it
+		mv $PASSVAULTFILE_LOCATION /tmp/.temporary_passvault_file.gpg
+		gpg --batch --passphrase $mpw -q --decrypt /tmp/.temporary_passvault_file.gpg | grep --ignore-case --invert-match $to_delete   | gpg --batch --passphrase $mpw -c --cipher-algo AES256 --force-mdc -o $PASSVAULTFILE_LOCATION
+		rm /tmp/.temporary_passvault_file.gpg
+	else
+		echo "aborting... (no changes were made)"
+		exit 1
+	fi
+	echo done
+	exit 0
+}
+
+
+
+
+# Show help when appropriate
+for argument in $@
+do
+	if [[ "$argument" =~ ^(--help|-h)$ ]]
+	then
+		passvault_help
+	fi
+done
+
+
+
+
+# Check if $PASSVAULTFILE_LOCATION is set and if not set, set it to "~/.passvault_save.gpg". Then expand the path.
+eval PASSVAULTFILE_LOCATION=${PASSVAULTFILE_LOCATION:="~/.passvault_save.gpg"}
+
+command=${1,,}
+
+if [[ $# -gt 0 ]]
+then
+	case "$command" in
+		-l|--lookup) echo lookup
+			passvault_lookup $2
+			;;
+		-a|--add) echo add
+			passvault_add
+			;;
+		-d|--delete) echo delete
+			passvault_delete
+			;;
+		-s|--setup) echo setup
+			passvault_setup
+			;;
+		-e|--environment-variable) echo environment-variable
+			passvault_environmen_variable $2
+			;;
+		*)
+			echo Error: Unknown command
+			passvault_help
+			;;
+	esac
+else
+	echo "Error: No command specified"
+	passvault_help
+fi
+
+
