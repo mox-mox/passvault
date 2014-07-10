@@ -1,7 +1,7 @@
 passvault
 =========
 
-Passvault is a tool to manage your passwords in a gpg-encrypted text file. To privide security, passwords will only be written encrypted, all unencrypted processing is done within pipes.
+Passvault is a tool to manage your passwords in a gpg-encrypted text file that I created out of challenge of sort. To privide security, passwords will only be written encrypted, all unencrypted processing is done within pipes.
 
 Things this program relies upon:
   * gpg
